@@ -15,9 +15,15 @@
 // Vars
 LiquidCrystalDevice_t lcd1;
 DateTime_t t;
+
+	// Set the time for the alarm (7 PM)
+uint8_t alarmHours = 19;   // 24-hour format
+uint8_t alarmMinutes = 0;
+uint8_t alarmSeconds = 0;
+	//
 bool isTrashOpen = false;  // Flag indicating trash duration(open or close)
 bool isTrashCompleteOpen = false; // Flag indicating if trash is completely open
-bool isTrashCompleteColse = false; // Flag indicating if trash is completely closed
+bool isTrashCompleteClose = false; // Flag indicating if trash is completely closed
 bool isMotorWorking = false; // Flag indicating motor status (working or not)
 bool isInAutomaticMode = true; // Flag indicating the mode
 bool buzzerOn =false; // when alarm flag on
@@ -25,6 +31,9 @@ bool isObjectDetected  =false; // when something detected near trash
 char receivedString[200]; // Declare a character array to store the received string
 uint8_t counter = 0; // Counter to keep track of the string length
 char setTimeCommand[] = "set time";
+char closeTrashCommand[] = "close";
+char openTrashCommand[] = "open";
+
 volatile uint16_t echoStartTime = 0;
 volatile uint16_t echoEndTime = 0;
 volatile bool measurementFlag = false;
@@ -39,6 +48,7 @@ void turnOffBuzzer();
 int  processCommand();
 float calculateDistance();
 void sendTriggerPulse();
+bool isAlarmTime();
 
 #if SERIAL_INTERRUPT == 1
 ISR(USART_RXC_vect) {
@@ -50,7 +60,7 @@ ISR(USART_RXC_vect) {
 	counter++;
 	if (c == '\r') { // If user has pressed ENTER (in Proteus)
 		receivedString[counter] = '\0'; // Null-terminate the string
-		// 		serial_send_string(receivedString);
+		serial_send_string(receivedString);
 		processCommand(receivedString);
 		// Reset the counter and clear the received string for the next input
 		counter = 0;
@@ -67,7 +77,7 @@ ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 	//=========
 	//buzzer
 	if (buzzerOn){
-		timeCounter++;}
+	timeCounter++;}
 	if (timeCounter == 33 && buzzerOn) { // Adjusted for approximately 33 for 1 sec
 		//turn off buzzer after 1 sec
 		timeCounter = 0;
@@ -90,8 +100,11 @@ ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 		isMotorWorking=true;
 	}
 	if(distanceTimeCounter==16 && !measurementFlag){
+		if(isInAutomaticMode){
+			measurementFlag=true;
+		}
 		distanceTimeCounter=0;
-		measurementFlag=true;
+		
 	}
 }
 
@@ -107,25 +120,22 @@ int main(void) {
 				closeTrash();
 			}
 		}
-		
 		// alarm process
-		if(buzzerOn){
-			turnOnBuzzer();
+		if (isAlarmTime()) {
+			buzzerOn=true;
+			turnOnBuzzer();  // 
 		}
-		if(!buzzerOn){
-			turnOffBuzzer();
-		}
-		if (measurementFlag) {
-			measurementFlag = false;
-			sendTriggerPulse();
-			// Calculate distance and set objectDetected flag
-			float distance = calculateDistance();
-			if (distance < Desired_Distance) {
-				isObjectDetected = true;
-				} else {
-				isObjectDetected = false;
-			}
-		}
+// 		if (measurementFlag) {
+// 			measurementFlag = false;
+// 			sendTriggerPulse();
+// 			// Calculate distance and set objectDetected flag
+// 			float distance = calculateDistance();
+// 			if (distance < Desired_Distance) {
+// 				isObjectDetected = true;
+// 				} else {
+// 				isObjectDetected = false;
+// 			}
+// 		}
 	}
 
 	return 0;
@@ -177,7 +187,7 @@ void closeTrash() {
 		serial_send_string(" closing...\r");
 
 	}
-	isTrashCompleteColse = true;
+	isTrashCompleteClose = true;
 	isMotorWorking = false;
 }
 
@@ -212,13 +222,19 @@ void initClock() {
 }
 
 void setupAlarm() {
-	// Set the time for the alarm (7 PM)
-	uint8_t alarmHours = 19;   // 24-hour format
-	uint8_t alarmMinutes = 0;
-	uint8_t alarmSeconds = 0;
-
 	// Set the alarm to trigger every day at the specified time
 	RTC_AlarmSet(Alarm1_Match_Hours, 0, alarmHours, alarmMinutes, alarmSeconds);
+}
+bool isAlarmTime() {
+	t = RTC_Get();
+	// Compare the current time with the alarm time
+	if (t.Hour == alarmHours &&
+	t.Minute == alarmMinutes &&
+	t.Second == alarmSeconds) {
+		return true;  // Alarm time has been reached
+		} else {
+		return false;  // Alarm time has not been reached
+	}
 }
 
 //=============================================
@@ -245,7 +261,7 @@ void init(){
 	TCCR0 = (1 << CS02) | (1 << CS00); // 101: Prescaler = 1024
 	sei(); // Enable interrupts after timer setup
 	serial_init();
-	serial_send_string(" Enter timer command: "); // Look at how \r works
+	serial_send_string(" Enter command: "); // Look at how \r works
 }
 //======================
 
@@ -315,6 +331,19 @@ void setTimeFromReceivedString(const char* str) {
 int processCommand(char* str) {
 	if (strstr(str, setTimeCommand) != NULL) {
 		setTimeFromReceivedString(str);
+	}
+	if (strstr(str, openTrashCommand) != NULL) {
+		serial_send_string("open command");
+		isMotorWorking=true;
+		isTrashOpen=true;
+		isTrashCompleteClose=false;
+
+			}
+	if (strstr(str, closeTrashCommand) != NULL) {
+		serial_send_string("close command");
+		isTrashCompleteOpen=false;
+		isMotorWorking=true;
+		isTrashOpen=false;
 	}
 	return 0;
 }
