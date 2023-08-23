@@ -49,6 +49,8 @@ int  processCommand();
 float calculateDistance();
 void sendTriggerPulse();
 bool isAlarmTime();
+void ADC_Init();
+void calculateTemp();
 
 #if SERIAL_INTERRUPT == 1
 ISR(USART_RXC_vect) {
@@ -247,12 +249,13 @@ void sensorInit() {
 }
 
 void init(){
+	ADC_Init();
 	initClock();
 	setupAlarm();
 	initBuzzer();
 	sensorInit();
 	DDRD |= (1 << BUZZER_PIN);  //buzzer init
-	DDRA |= (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);// motor init
+	DDRA |= (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4);// motor init
 	i2c_master_init(I2C_SCL_FREQUENCY_400);
 	lcd1 = lq_init(0x27, 16, 2, LCD_5x8DOTS);
 	cli(); // Disable interrupts during timer setup
@@ -313,6 +316,8 @@ void printClock() {
 		char dateArr[10];
 		sprintf(dateArr, "%02d/%02d/%02d", t.Year, t.Month, t.Date);
 		lq_print(&lcd1, dateArr);
+		
+		calculateTemp();
 	}
 }
 
@@ -355,6 +360,40 @@ void printDistanceInSerial(float distance){
 	
 	// Send the distance string over UART
 	serial_send_string(distanceStr);
+}
+
+//======================
+//temp
+
+void ADC_Init() {
+	//ADMUX |= (1 << REFS0);
+	//ADCSRA |= (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); //set prescaler to 128
+	ADMUX = (1 << REFS1) | (1 << REFS0);
+	ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+
+uint16_t adcRead()
+{
+	/*ADMUX = (ADMUX & 0xF0) | (ADC_CHANNEL & 0x0F); //clear previous channel and set a new channel
+	ADCSRA |= (1 << ADSC); //start a single ADC conversion by setting the ADSC bit
+	while(ADCSRA & (1 << ADSC));//wait for conversion to complete
+	return ADC;
+	*/
+	ADCSRA |= (1 << ADSC) | (1 << ADIF);
+	while (ADCSRA & (1 << ADIF) == 0);
+	return ADC;
+}
+void calculateTemp(){
+		uint16_t adcValue;
+		float temperature;
+		adcValue = adcRead();
+		temperature = (float)adcRead() / 4;
+		printDistanceInSerial(temperature);
+		char tempStr[10];
+		dtostrf(temperature, 4, 1, tempStr);
+		lq_setCursor(&lcd1, 1, 13);
+		lq_print(&lcd1, tempStr);
 }
 
 
