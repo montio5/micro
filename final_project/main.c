@@ -7,6 +7,7 @@
 #include "i2c_lib.h"
 #include "liquid_crystal_i2c_lib.h"
 #include "Serial_lib.h"
+#define F_CPU	8000000
 #include <util/delay.h>
 #define BUZZER_PIN  PD7
 #define TRIG_PIN PB1
@@ -23,6 +24,11 @@ DateTime_t t;
 uint8_t alarmHours = 19;   // 24-hour format
 uint8_t alarmMinutes = 0;
 uint8_t alarmSeconds = 0;
+
+int distance, last_distance;
+char numberString[4];
+
+int TimerOverflow = 0;
 
 bool isTrashOpen = false;  // Flag indicating trash duration(open or close)
 bool isTrashCompleteOpen = false; // Flag indicating if trash is completely open
@@ -47,7 +53,9 @@ volatile uint16_t echoEndTime = 0;
 // functions
 void init();
 void updateLcd();
-void setTimeFromReceivedString(const char* str);
+void setTimeFromReceivedString(char* str);
+void turnOffBuzzer();
+void turnOnBuzzer();
 //============================
 //intrupts
 #if SERIAL_INTERRUPT == 1
@@ -83,21 +91,24 @@ ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 		TCNT0 = 6;
 		buzzerOn=false;
 		turnOffBuzzer();
+		serial_send_string("buzzer off \r");
+
 	}
 	//========
 	//sensor
-	if(isObjectDetected){
+	if(isInAutomaticMode && isTrashCompleteOpen){
 		trashOpentimeCounter++;
+		if (trashOpentimeCounter == 310 ) { // Adjusted for approximately 310 for 10 sec->10/ 0.032256
+				// closing trash after 10s
+				trashOpentimeCounter = 0;
+				TCNT0 = 6;
+				isObjectDetected=false;
+				isTrashOpen=false;
+				isMotorWorking=true;
+			}
 	}
 
-	if (trashOpentimeCounter == 310 && isObjectDetected) { // Adjusted for approximately 310 for 10 sec->10/ 0.032256
-		// closing trash after 10s
-		trashOpentimeCounter = 0;
-		TCNT0 = 6;
-		isObjectDetected=false;
-		isTrashOpen=false;
-		isMotorWorking=true;
-	}
+
 	if(distanceTimeCounter==16){// Adjusted for approximately 15.5 for 0.5 sec->0.5/ 0.032256
 		if(isInAutomaticMode){
 			measurementFlag=true;
@@ -112,17 +123,25 @@ ISR(INT0_vect)
 {
 	// if button pressed
 	isInAutomaticMode= !isInAutomaticMode;//toggle
-	if(!isInAutomaticMode){
+	if(!isInAutomaticMode){// manaul 
 		serial_send_string("manual mode Actived! \r");
-		isMotorWorking=true;
 		isTrashOpen=true;
 		measurementFlag=false;	
 	}
 	else{
-		("Automatic mode Actived! \r");
-		isMotorWorking=true;
+		serial_send_string("Automatic mode Actived! \r");
 		isTrashOpen=false;
 	}
+	isMotorWorking=true;
+
+}
+
+ISR(INT1_vect){
+			 turnOnBuzzer();
+			 buzzerOn=true;
+			 serial_send_string(" buzzer On \r");
+			 RTC_AlarmCheck(Alarm_1);
+	
 }
 //============================
 //comand mamager
@@ -150,13 +169,13 @@ int processCommand(char* str) {
 void openTrash() {
 	// Code to open the curtain
 	for (int i = 0; i < 5; i++) {
-		PORTA = 0x04;
-		_delay_ms(200);
-		PORTA = 0x02;
-		_delay_ms(200);
 		PORTA = 0x08;
 		_delay_ms(200);
-		PORTA = 0x01;
+		PORTA = 0x04;
+		_delay_ms(200);
+		PORTA = 0x10;
+		_delay_ms(200);
+		PORTA = 0x02;
 		_delay_ms(200);
 		serial_send_string(" opening...\r");
 
@@ -169,13 +188,13 @@ void openTrash() {
 void closeTrash() {
 	// Code to close the curtain
 	for (int i = 0; i < 5; i++) {
-		PORTA = 0x01;
-		_delay_ms(200);
-		PORTA = 0x08;
-		_delay_ms(200);
 		PORTA = 0x02;
 		_delay_ms(200);
+		PORTA = 0x10;
+		_delay_ms(200);
 		PORTA = 0x04;
+		_delay_ms(200);
+		PORTA = 0x08;
 		_delay_ms(200);
 		serial_send_string(" closing...\r");
 
@@ -191,7 +210,7 @@ void initClock() {
 	DateTime_t time;
 	time.Second = 55;
 	time.Minute = 59;
-	time.Hour = 18;
+	time.Hour = 19;
 	time.Day = Sunday;
 	time.Date = 29;
 	time.Month = June;
@@ -200,9 +219,9 @@ void initClock() {
 }
 
 void initBuzzer() {
-	PORTD |= (1 << ALARM_IN);//alarm_in
 	// Initialize buzzer pin as output
 	DDRD |= (1 << BUZZER_PIN);  //buzzer init
+	PORTD |= (1 << ALARM_IN);//alarm_in
 }
 
 void turnOnBuzzer() {
@@ -215,11 +234,13 @@ void turnOffBuzzer() {
 
 void setupAlarm() {
 	// Set the alarm to trigger every day at the specified time
+	GICR |= (1 << INT1);// Enable interrupt 1
+	MCUCR |= (1 << ISC11);	// Set falling edge interrupt
 	RTC_AlarmInterrupt(Alarm_1,1);
 	RTC_AlarmSet(Alarm1_Match_Hours, t.Date, alarmHours, alarmMinutes, alarmSeconds);
 }
 void checkAlarm(){
-	 		if ( PORTD & (1<<ALARM_IN) == 0)
+	 		if ( PIND & (1<<ALARM_IN) == 0)
 	 		{
 		 		turnOnBuzzer();
 				buzzerOn=true;
@@ -234,36 +255,35 @@ void checkAlarm(){
 void sensorInit() {
 	// Set TRIGGER_PIN as output and ECHO_PIN as input
 	DDRB |= (1 << TRIG_PIN); // Set TRIGGER_PIN as output
-
-}
-
-void sendTriggerPulse() {
-	// Generate a pulse on TRIGGER_PIN to trigger the ultrasonic sensor
-	PORTB |= (1 << TRIG_PIN); // Set TRIGGER_PIN high
-	_delay_us(15);               // Wait for a short duration
-	PORTB &= ~(1 << TRIG_PIN);// Set TRIGGER_PIN low
+	
 }
 
 float calculateDistance() {
-	// Measure the duration of the pulse on the ECHO_PIN
-	while (!(PINA & (1 << ECHO_PIN))) {
-		// Wait for the pulse to start
-	}
-	// Record the start time
-	echoStartTime = TCNT0;
-	while (PINA & (1 << ECHO_PIN)) {
-		// Wait for the pulse to end
-	}
-	// Record the end time
-	echoEndTime = TCNT0;
-	// Calculate the duration of the pulse
-	uint16_t echoDuration = echoEndTime - echoStartTime;
-	// Convert the duration to distance using the speed of sound
-	// Speed of sound = 34300 cm/s (for air at room temperature)
-	// Distance = (duration / 2) * speed of sound
-	float distance = (echoDuration * 0.01715); // 0.01715 = 34300 cm/s / 2
-	return distance;
+		/* Give 10us trigger pulse on trig. pin to HC-SR04 */
+		PORTB |= (1 << TRIG_PIN);
+		_delay_us(10);
+		PORTB &= ~(1 << TRIG_PIN);
+		
+		TCNT1 = 0;	/* Clear Timer counter */
+		TCCR1B = 0x41;	/* Capture on rising edge, No prescaler*/
+		TIFR = 1<<ICF1;	/* Clear ICP flag (Input Capture flag) */
+		TIFR = 1<<TOV1;	/* Clear Timer Overflow flag */
+
+		/*Calculate width of Echo by Input Capture (ICP) */
+		
+		while ((TIFR & (1 << ICF1)) == 0);/* Wait for rising edge */
+		TCNT1 = 0;	/* Clear Timer counter */
+		TCCR1B = 0x01;	/* Capture on falling edge, No prescaler */
+		TIFR = 1<<ICF1;	/* Clear ICP flag (Input Capture flag) */
+		TIFR = 1<<TOV1;	/* Clear Timer Overflow flag */
+		while ((TIFR & (1 << ICF1)) == 0);/* Wait for falling edge */
+		long count = ICR1 + (65535 * TimerOverflow);	/* Take count */
+		/* 8MHz Timer freq, sound speed =343 m/s */
+		distance = (double)count / 466.47;
+		return distance;
 }
+
+
 
 //======================
 //temp
@@ -321,7 +341,6 @@ void updateLcd() {
 }
 
 void showFloatInSerial(float distance){
-	
 	char distanceStr[20];
 	snprintf(distanceStr, sizeof(distanceStr), "%.2f", distance);
 	
@@ -329,10 +348,17 @@ void showFloatInSerial(float distance){
 	serial_send_string(distanceStr);
 }
 void buttonInit(){
-	PORTD |= (1 << PD6);// Pull up button
+	PORTD |= (1 << PD2);// Pull up button
 	GICR |= (1 << INT0);// Enable Button interrupt 0
 	MCUCR |= (1 << ISC01);	// Set falling edge interrupt
 }
+
+
+ISR(TIMER1_OVF_vect)
+{
+	TimerOverflow++;	/* Increment Timer Overflow count */
+}
+
 void init(){
 	ADC_Init();
 	initClock();
@@ -347,22 +373,35 @@ void init(){
 	TIMSK |= (1 << TOIE0);
 	TCNT0 = 5; // Timer start
 	TCCR0 = (1 << CS02) | (1 << CS00); // 101: Prescaler = 1024
+	
+	TIMSK |= (1 << TOIE1);	/* Enable Timer1 overflow interrupts */
+	TCCR1A = 0;		/* Set all bit to zero Normal operation */
 	//Timer Clock Frequency = System Clock Frequency / Prescaler Division Factor = 8,000,000 / 1024 ? 7812.5 Hz
 	//Timer Duration = Number of Timer Counts / Timer Clock Frequency = 252 / 7812.5 ? 0.032256 seconds (32.256 ms)
 	serial_init();
 	sei(); // Enable interrupts after timer setup
 }
 
-void setTimeFromReceivedString(const char* str) {
+void setTimeFromReceivedString(char* str) {
+	serial_send_string(str);
 	char formatString[] = "set time %d:%d:%d %d/%d/%d";
+	int hour, min, second, mont, date, year;
 	DateTime_t t1 ;
-	sscanf(str, formatString, &t1.Hour, &t1.Minute, &t1.Second, &t1.Month, &t1.Date, &t1.Year);
+	sscanf(str, formatString, &	hour,& min,& second,& mont,& date, & year);
+	t1.Second = second;
+	t1.Minute = min;
+	t1.Hour = hour;
+	t1.Date = date;
+	t1.Month = mont;
+	t1.Year = 2000+year;
 	RTC_Set(t1);
 }
 
 int main(void) {
 
 	init();
+	TCCR1A = 0;		/* Set all bit to zero Normal operation */
+
 	serial_send_string(" Enter command: "); // Look at how \r works
 	while (1) {
 		//motor process
@@ -370,33 +409,32 @@ int main(void) {
 			serial_send_string(" motor working...\r");
 			if (isTrashOpen && !isTrashCompleteOpen) {
 				openTrash();
-				} else if (!isTrashOpen && isInAutomaticMode &&!isTrashCompleteClose) {
+			} else if (!isTrashOpen && isInAutomaticMode &&!isTrashCompleteClose) {
 				closeTrash();
-			}
-			else{
+			} else{
 				isMotorWorking=false;
 			}
 		}
 
-		if (measurementFlag) {
-//			serial_send_string(" enter sensor\r");
-			measurementFlag = false;
-// 			sendTriggerPulse();
-// 			// Calculate distance and set objectDetected flag
-// 			float distance = calculateDistance();
-// 			if (distance < Desired_Distance) {
-// 				isObjectDetected = true;
-// 				serial_send_string(" object found\r");
-// 				} else {
-// 				serial_send_string(" object not found\r");
-// 				isObjectDetected = false;
-// 			}
-		}
+	if (true) {
+// 		measurementFlag = false;
+// 		char buff[10];
+// 		float dist = calculateDistance();
+// 		sprintf(buff, "%.1f", dist);
+// 		serial_send_string(buff);
+// 			 			if (distance < Desired_Distance) {
+// 							isObjectDetected = true;
+// 							serial_send_string(" object found\r");
+// 			 				} else {
+// 			 				serial_send_string(" object not found\r");
+// 							isObjectDetected = false;
+// 			 			}
+ 		}
+
 		if(isUpdateTemp){
 			calculateTemp();
 			isUpdateTemp=false;
 		}
-		checkAlarm();
 	}
 
 	return 0;
