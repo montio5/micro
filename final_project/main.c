@@ -8,9 +8,8 @@
 #include "liquid_crystal_i2c_lib.h"
 #include "Serial_lib.h"
 #include <util/delay.h>
-#define BUZZER_PIN  PD4
+#define BUZZER_PIN  PD7
 #define TRIG_PIN PB1
-#define ECHO_PIN PB0
 #define ECHO_PIN PB0
 #define ALARM_IN PD3
 
@@ -29,7 +28,7 @@ bool isTrashOpen = false;  // Flag indicating trash duration(open or close)
 bool isTrashCompleteOpen = false; // Flag indicating if trash is completely open
 bool isTrashCompleteClose = false; // Flag indicating if trash is completely closed
 bool isMotorWorking = false; // Flag indicating motor status (working or not)
-bool isInAutomaticMode = true; // Flag indicating the mode
+bool isInAutomaticMode = false; // Flag indicating the mode
 bool buzzerOn =false; // when alarm flag on
 bool isObjectDetected  =false; // when something detected near trash
 bool isUpdateTemp=false;
@@ -121,6 +120,8 @@ ISR(INT0_vect)
 	}
 	else{
 		("Automatic mode Actived! \r");
+		isMotorWorking=true;
+		isTrashOpen=false;
 	}
 }
 //============================
@@ -161,6 +162,7 @@ void openTrash() {
 
 	}
 	isTrashCompleteOpen = true;
+	isTrashCompleteClose = false;
 	isMotorWorking = false;
 }
 
@@ -178,6 +180,7 @@ void closeTrash() {
 		serial_send_string(" closing...\r");
 
 	}
+	isTrashCompleteOpen = false;
 	isTrashCompleteClose = true;
 	isMotorWorking = false;
 }
@@ -185,15 +188,15 @@ void closeTrash() {
 //===================
 // alarm
 void initClock() {
-	DateTime_t t;
-	t.Second = 55;
-	t.Minute = 59;
-	t.Hour = 18;
-	t.Day = Sunday;
-	t.Date = 29;
-	t.Month = June;
-	t.Year = 2025;
-	RTC_Set(t);
+	DateTime_t time;
+	time.Second = 55;
+	time.Minute = 59;
+	time.Hour = 18;
+	time.Day = Sunday;
+	time.Date = 29;
+	time.Month = June;
+	time.Year = 2025;
+	RTC_Set(time);
 }
 
 void initBuzzer() {
@@ -340,6 +343,7 @@ void init(){
 	cli(); // Disable interrupts during timer setup
 	initBuzzer();
 	setupAlarm();
+	buttonInit();
 	TIMSK |= (1 << TOIE0);
 	TCNT0 = 5; // Timer start
 	TCCR0 = (1 << CS02) | (1 << CS00); // 101: Prescaler = 1024
