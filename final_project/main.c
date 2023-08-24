@@ -48,7 +48,7 @@ void turnOffBuzzer();
 int  processCommand();
 float calculateDistance();
 void sendTriggerPulse();
-bool isAlarmTime();
+/*bool isAlarmTime();*/
 void ADC_Init();
 void calculateTemp();
 
@@ -74,8 +74,8 @@ ISR(USART_RXC_vect) {
 ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 	TCNT0 = 6;
 	TIFR |= (1 << TOV0);
-	printClock();
 	distanceTimeCounter++;
+	printClock();
 	//=========
 	//buzzer
 	if (buzzerOn){
@@ -98,7 +98,6 @@ ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 		TCNT0 = 6;
 		isObjectDetected=false;
 		isTrashOpen=false;
-		isTrashCompleteOpen=false;
 		isMotorWorking=true;
 	}
 	if(distanceTimeCounter==16 && !measurementFlag){
@@ -109,35 +108,49 @@ ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 		
 	}
 }
-
+ISR(INT0_vect){
+	buzzerOn=true;
+	turnOnBuzzer();
+	serial_send_string(" buzzzzer \r");
+}
 int main(void) {
 
 	init();
+	serial_send_string(" Enter command: "); // Look at how \r works
 	while (1) {
 		//motor process
 		if (isMotorWorking) {
-			if (isTrashOpen) {
+			serial_send_string(" motor working...\r");
+			if (isTrashOpen && !isTrashCompleteOpen) {
+				serial_send_string(" motor working->open...\r");
 				openTrash();
-				} else if (!isTrashOpen && isInAutomaticMode) {
+				} else if (!isTrashOpen && isInAutomaticMode &&!isTrashCompleteClose) {
+					serial_send_string(" motor working->close...\r");
 				closeTrash();
+			}
+			else{
+				isMotorWorking=false;
 			}
 		}
 		// alarm process
-		if (isAlarmTime()) {
-			buzzerOn=true;
-			turnOnBuzzer();  // 
-		}
-// 		if (measurementFlag) {
-// 			measurementFlag = false;
-// 			sendTriggerPulse();
-// 			// Calculate distance and set objectDetected flag
-// 			float distance = calculateDistance();
-// 			if (distance < Desired_Distance) {
-// 				isObjectDetected = true;
-// 				} else {
-// 				isObjectDetected = false;
-// 			}
+// 		if (isAlarmTime()) {
+// 			buzzerOn=true;
+// 			turnOnBuzzer();  // 
 // 		}
+		if (measurementFlag) {
+			serial_send_string(" enter sensor\r");
+			measurementFlag = false;
+			sendTriggerPulse();
+			// Calculate distance and set objectDetected flag
+			float distance = calculateDistance();
+			if (distance < Desired_Distance) {
+				isObjectDetected = true;
+							serial_send_string(" object found\r");
+				} else {
+												serial_send_string(" object not found\r");
+				isObjectDetected = false;
+			}
+		}
 	}
 
 	return 0;
@@ -194,7 +207,7 @@ void closeTrash() {
 }
 
 //===================
-
+// alarm
 void initBuzzer() {
 	// Initialize buzzer pin as output
 	DDRD |= (1 << BUZZER_PIN);
@@ -208,11 +221,9 @@ void turnOffBuzzer() {
 	PORTD &= ~(1 << BUZZER_PIN); // Set the pin low to turn off the buzzer
 }
 
-//===================
-
 void initClock() {
 	DateTime_t t;
-	t.Second = 57;
+	t.Second = 55;
 	t.Minute = 59;
 	t.Hour = 18;
 	t.Day = Sunday;
@@ -220,59 +231,39 @@ void initClock() {
 	t.Month = June;
 	t.Year = 2025;
 	RTC_Set(t);
-
 }
 
 void setupAlarm() {
 	// Set the alarm to trigger every day at the specified time
-	RTC_AlarmSet(Alarm1_Match_Hours, 0, alarmHours, alarmMinutes, alarmSeconds);
+    DDRD |= (1 << 7);  // Clear the corresponding bit in DDRA register
+    PORTD |= (1 << PD2);  // Set the corresponding bit in PORTA register	RTC_AlarmInterrupt(Alarm_1,1);
+	RTC_AlarmSet(Alarm1_Match_Hours, t.Date, alarmHours, alarmMinutes, alarmSeconds);
 }
-bool isAlarmTime() {
-	t = RTC_Get();
-	// Compare the current time with the alarm time
-	if (t.Hour == alarmHours &&
-	t.Minute == alarmMinutes &&
-	t.Second == alarmSeconds) {
-		return true;  // Alarm time has been reached
-		} else {
-		return false;  // Alarm time has not been reached
-	}
-}
+// bool isAlarmTime() {
+// 	t = RTC_Get();
+// 	// Compare the current time with the alarm time
+// 	if (t.Hour == alarmHours &&
+// 	t.Minute == alarmMinutes &&
+// 	t.Second == alarmSeconds) {
+// 		return true;  // Alarm time has been reached
+// 		} else {
+// 		return false;  // Alarm time has not been reached
+// 	}
+// }
 
 //=============================================
+// sensor
 void sensorInit() {
 	// Set TRIGGER_PIN as output and ECHO_PIN as input
 	DDRB |= (1 << TRIG_PIN); // Set TRIGGER_PIN as output
-	DDRB &= ~(1 << ECHO_PIN);   // Set ECHO_PIN as input
-	// Enable pull-up resistor for ECHO_PIN
-	PORTB |= (1 << ECHO_PIN);
-}
 
-void init(){
-	ADC_Init();
-	initClock();
-	setupAlarm();
-	initBuzzer();
-	sensorInit();
-	DDRD |= (1 << BUZZER_PIN);  //buzzer init
-	DDRA |= (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4);// motor init
-	i2c_master_init(I2C_SCL_FREQUENCY_400);
-	lcd1 = lq_init(0x27, 16, 2, LCD_5x8DOTS);
-	cli(); // Disable interrupts during timer setup
-	TIMSK |= (1 << TOIE0);
-	TCNT0 = 5; // Timer start
-	TCCR0 = (1 << CS02) | (1 << CS00); // 101: Prescaler = 1024
-	sei(); // Enable interrupts after timer setup
-	serial_init();
-	serial_send_string(" Enter command: "); // Look at how \r works
 }
-//======================
 
 void sendTriggerPulse() {
 	// Generate a pulse on TRIGGER_PIN to trigger the ultrasonic sensor
-	PORTA |= (1 << TRIG_PIN); // Set TRIGGER_PIN high
-	_delay_us(10);               // Wait for a short duration
-	PORTA &= ~(1 << TRIG_PIN);// Set TRIGGER_PIN low
+	PORTB |= (1 << TRIG_PIN); // Set TRIGGER_PIN high
+	_delay_us(15);               // Wait for a short duration
+	PORTB &= ~(1 << TRIG_PIN);// Set TRIGGER_PIN low
 }
 
 float calculateDistance() {
@@ -289,68 +280,11 @@ float calculateDistance() {
 	echoEndTime = TCNT0;
 	// Calculate the duration of the pulse
 	uint16_t echoDuration = echoEndTime - echoStartTime;
-	
 	// Convert the duration to distance using the speed of sound
 	// Speed of sound = 34300 cm/s (for air at room temperature)
 	// Distance = (duration / 2) * speed of sound
 	float distance = (echoDuration * 0.01715); // 0.01715 = 34300 cm/s / 2
 	return distance;
-}
-
-
-//=====================
-
-void printClock() {
-	// Print time on LCD
-	t = RTC_Get();
-	if (RTC_Status() == RTC_OK) {
-		// Print time on lcd
-		lq_setCursor(&lcd1, 0, 0);
-		char timeArr[10];
-		sprintf(timeArr, "%02d:%02d:%02d", t.Hour, t.Minute, t.Second); // Google about sprintf()
-		// Also change "%d:%d:%d" to "%02d:%02d:%02d" and see what happens for 1 digit numbers
-		lq_print(&lcd1, timeArr);
-
-		// Print date on lcd
-		lq_setCursor(&lcd1, 1, 0);
-		char dateArr[10];
-		sprintf(dateArr, "%02d/%02d/%02d", t.Year, t.Month, t.Date);
-		lq_print(&lcd1, dateArr);
-		
-		calculateTemp();
-	}
-}
-
-void setTimeFromReceivedString(const char* str) {
-	// 	serial_send_string(str);
-	char formatString[] = "set time %d:%d:%d %d/%d/%d";
-	// Extract the values from the received string
-	DateTime_t t1 ;
-	sscanf(str, formatString, &t1.Hour, &t1.Minute, &t1.Second, &t1.Month, &t1.Date, &t1.Year);
-	// 	char numarr[50];
-	// 	sprintf(numarr,"%02d:%02d:%02d %02d/%02d/%02d",t1.Hour,t1.Minute,t1.Second, t1.Month, t1.Date, t1.Year);
-	// 	serial_send_string(numarr);
-	RTC_Set(t1);
-}
-
-int processCommand(char* str) {
-	if (strstr(str, setTimeCommand) != NULL) {
-		setTimeFromReceivedString(str);
-	}
-	if (strstr(str, openTrashCommand) != NULL) {
-		serial_send_string("open command");
-		isMotorWorking=true;
-		isTrashOpen=true;
-		isTrashCompleteClose=false;
-
-			}
-	if (strstr(str, closeTrashCommand) != NULL) {
-		serial_send_string("close command");
-		isTrashCompleteOpen=false;
-		isMotorWorking=true;
-		isTrashOpen=false;
-	}
-	return 0;
 }
 
 void printDistanceInSerial(float distance){
@@ -389,14 +323,132 @@ void calculateTemp(){
 		float temperature;
 		adcValue = adcRead();
 		temperature = (float)adcRead() / 4;
-		printDistanceInSerial(temperature);
 		char tempStr[10];
 		dtostrf(temperature, 4, 1, tempStr);
 		lq_setCursor(&lcd1, 1, 13);
 		lq_print(&lcd1, tempStr);
 }
+//=====================================
+// common methods
 
+void printClock() {
+	// Print time on LCD
+	t = RTC_Get();
+	if (RTC_Status() == RTC_OK) {
+		// Print time on lcd
+		lq_setCursor(&lcd1, 0, 0);
+		char timeArr[10];
+		sprintf(timeArr, "%02d:%02d:%02d", t.Hour, t.Minute, t.Second); // Google about sprintf()
+		// Also change "%d:%d:%d" to "%02d:%02d:%02d" and see what happens for 1 digit numbers
+		lq_print(&lcd1, timeArr);
 
+		// Print date on lcd
+		lq_setCursor(&lcd1, 1, 0);
+		char dateArr[10];
+		sprintf(dateArr, "%02d/%02d/%02d", t.Year, t.Month, t.Date);
+		lq_print(&lcd1, dateArr);
+		
+		calculateTemp();
+	}
+}
 
+void setTimeFromReceivedString(const char* str) {
+	char formatString[] = "set time %d:%d:%d %d/%d/%d";
+	DateTime_t t1 ;
+	sscanf(str, formatString, &t1.Hour, &t1.Minute, &t1.Second, &t1.Month, &t1.Date, &t1.Year);
+	RTC_Set(t1);
+}
 
+int processCommand(char* str) {
+	if (strstr(str, setTimeCommand) != NULL) {
+		setTimeFromReceivedString(str);
+	}
+	if (strstr(str, openTrashCommand) != NULL) {
+		serial_send_string("open command");
+		isMotorWorking=true;
+		isTrashOpen=true;
 
+	}
+	if (strstr(str, closeTrashCommand) != NULL) {
+		serial_send_string("close command");
+		isMotorWorking=true;
+		isTrashOpen=false;
+	}
+	return 0;
+}
+void init(){
+	ADC_Init();
+	initClock();
+	sensorInit();
+	DDRD |= (1 << BUZZER_PIN);  //buzzer init
+	DDRA |= (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4);// motor init
+	i2c_master_init(I2C_SCL_FREQUENCY_400);
+	lcd1 = lq_init(0x27, 16, 2, LCD_5x8DOTS);
+	cli(); // Disable interrupts during timer setup
+	setupAlarm();
+	initBuzzer();
+	TIMSK |= (1 << TOIE0);
+	TCNT0 = 5; // Timer start
+	TCCR0 = (1 << CS02) | (1 << CS00); // 101: Prescaler = 1024
+	serial_init();
+	sei(); // Enable interrupts after timer setup
+
+}
+int extractTimeValues(const char *input, uint8_t index)
+{
+	uint8_t wordCount = 0;
+	uint8_t i = 0;
+	uint8_t j = 0;
+	char *output;
+	while (input[i] != '\0'){
+		while (input[i] == ' ' || input[i] == '\t' || input[i] == ':' || input[i] == '/')
+		i++;
+		if (input[i] != ' ' && input[i] != '\t')
+		{
+			wordCount++;
+			if (wordCount == index)
+			{
+				while (input[i] != ' ' && input[i] != '\t' && input[i] != '\0' && input[i] != ':' && input[i] != '/')
+				{
+					output[j] = input[i];
+					i++;
+					j++;
+				}
+				output[j] = '\0';
+				return;
+			}
+			while (input[i] != ' ' && input[i] != '\t' && input[i] != '\0' && input[i] != ':' && input[i] != '/')
+			i++;
+		}
+	}
+	output[0] = '\0';
+	
+	//convert char to int
+	int outputInt =0;
+	int x = 0;
+	
+	while(output[x] != '\0'){
+		outputInt = outputInt * 10 + (output[x] - '0');
+		x++;
+	}
+	return outputInt;
+}
+
+void setTimeAndDate(char *str)
+{
+	t = RTC_Get();
+	char hour[10];
+	char min[10];
+	char sec[10];
+	char day[10];
+	char month[10];
+	char year[10];
+	
+	t.Hour = extractTimeValues(hour, 3);
+	t.Minute = extractTimeValues(min, 4);
+	t.Second = extractTimeValues(sec,5);
+	t.Date = extractTimeValues(day, 6);
+	t.Month = extractTimeValues(month, 7);
+	t.Year = extractTimeValues(year, 8) + 1988;
+	RTC_Set(t);
+}
