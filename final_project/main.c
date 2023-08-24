@@ -78,8 +78,8 @@ ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 	if (buzzerOn){
 	buzzerTimeCounter++;}
 	
-	if (buzzerTimeCounter == 33 && buzzerOn) { // Adjusted for approximately 33 for 1 sec
-		//turn off buzzer after 1 sec
+	if (buzzerTimeCounter == 62 && buzzerOn) { // Adjusted for approximately 62 for 2 sec-> 1/ 0.032256
+		//turn off buzzer after 2 sec
 		buzzerTimeCounter = 0;
 		TCNT0 = 6;
 		buzzerOn=false;
@@ -91,7 +91,7 @@ ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 		trashOpentimeCounter++;
 	}
 
-	if (trashOpentimeCounter == 325 && isObjectDetected) { // Adjusted for approximately 325 for 10 sec
+	if (trashOpentimeCounter == 310 && isObjectDetected) { // Adjusted for approximately 310 for 10 sec->10/ 0.032256
 		// closing trash after 10s
 		trashOpentimeCounter = 0;
 		TCNT0 = 6;
@@ -99,7 +99,7 @@ ISR(TIMER0_OVF_vect) { // Timer0 overflow interrupt
 		isTrashOpen=false;
 		isMotorWorking=true;
 	}
-	if(distanceTimeCounter==16){
+	if(distanceTimeCounter==16){// Adjusted for approximately 15.5 for 0.5 sec->0.5/ 0.032256
 		if(isInAutomaticMode){
 			measurementFlag=true;
 		}
@@ -120,7 +120,7 @@ ISR(INT0_vect)
 		measurementFlag=false;	
 	}
 	else{
-		serial_send_string("Automatic mode Actived! \r");
+		("Automatic mode Actived! \r");
 	}
 }
 //============================
@@ -199,7 +199,7 @@ void initClock() {
 void initBuzzer() {
 	PORTD |= (1 << ALARM_IN);//alarm_in
 	// Initialize buzzer pin as output
-	DDRD |= (1 << BUZZER_PIN);
+	DDRD |= (1 << BUZZER_PIN);  //buzzer init
 }
 
 void turnOnBuzzer() {
@@ -216,7 +216,6 @@ void setupAlarm() {
 	RTC_AlarmSet(Alarm1_Match_Hours, t.Date, alarmHours, alarmMinutes, alarmSeconds);
 }
 void checkAlarm(){
-			serial_send_string(" alarmmm");
 	 		if ( PORTD & (1<<ALARM_IN) == 0)
 	 		{
 		 		turnOnBuzzer();
@@ -335,16 +334,17 @@ void init(){
 	ADC_Init();
 	initClock();
 	sensorInit();
-	DDRD |= (1 << BUZZER_PIN);  //buzzer init
 	DDRA |= (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4);// motor init
 	i2c_master_init(I2C_SCL_FREQUENCY_400);
 	lcd1 = lq_init(0x27, 16, 2, LCD_5x8DOTS);
 	cli(); // Disable interrupts during timer setup
-	setupAlarm();
 	initBuzzer();
+	setupAlarm();
 	TIMSK |= (1 << TOIE0);
 	TCNT0 = 5; // Timer start
 	TCCR0 = (1 << CS02) | (1 << CS00); // 101: Prescaler = 1024
+	//Timer Clock Frequency = System Clock Frequency / Prescaler Division Factor = 8,000,000 / 1024 ? 7812.5 Hz
+	//Timer Duration = Number of Timer Counts / Timer Clock Frequency = 252 / 7812.5 ? 0.032256 seconds (32.256 ms)
 	serial_init();
 	sei(); // Enable interrupts after timer setup
 }
